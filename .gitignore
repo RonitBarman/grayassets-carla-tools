@@ -1,0 +1,8 @@
+__pycache__/
+*.py[cod]
+output/
+*.log
+*.pcap
+*.pcapng
+*.mp4
+*.tar.gz
