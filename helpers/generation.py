@@ -20,7 +20,7 @@ def generate(settings):
         raise ValueError('NUM_SAMPLES must be positive')
     if s['MODE'] == 'multi_vehicle':
         from helpers.multi_vehicle import validate_settings
-        validate_settings(s['CARS_PER_SAMPLE'], s['DELTA_SECONDS'])
+        validate_settings(s['CARS_PER_SAMPLE'], s['DELTA_SECONDS'], s['MIN_OVERLAP_SECONDS'])
     if s['MODE'] in ('agent', 'pedestrians'):
         api = Path(s['CARLA_ROOT']) / 'PythonAPI' / 'carla'
         if str(api) not in sys.path:

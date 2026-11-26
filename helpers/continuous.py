@@ -84,6 +84,31 @@ class CARLASimulator:
         despawn_frame = int((spawn_time + duration) * self.fps) if despawn_frame is None else despawn_frame
         self.vehicle_configs.append({'vehicle_type': vehicle_type, 'velocity': carla.Vector3D(x=velocity[0], y=velocity[1], z=0.0), 'spawn_pos': carla.Location(x=spawn_pos[0], y=spawn_pos[1], z=0.3), 'spawn_yaw': spawn_yaw, 'spawn_frame': spawn_frame, 'despawn_frame': despawn_frame, 'vehicle_color_name': vehicle_color_name, 'vehicle_color': vehicle_color, 'vehicle_index': vehicle_index})
 
+    def _update_vehicles(self, frame):
+        to_despawn = [vid for vid, dframe in self.despawn_queue.items() if dframe == frame]
+        for vid in to_despawn:
+            actor = self.active_vehicles[vid]['actor']
+            actor.destroy()
+            print(f'🔴 Despawned vehicle {vid} at frame {frame}')
+            del self.active_vehicles[vid]
+            del self.despawn_queue[vid]
+        while self.next_spawn_idx < len(self.vehicle_configs) and self.vehicle_configs[self.next_spawn_idx]['spawn_frame'] == frame:
+            cfg = self.vehicle_configs[self.next_spawn_idx]
+            bp = self.blueprint_library.filter(cfg['vehicle_type'])[0]
+            if cfg.get('vehicle_color') and bp.has_attribute('color'):
+                bp.set_attribute('color', cfg['vehicle_color'])
+            elif cfg.get('vehicle_color'):
+                print(f"⚠️ Blueprint {cfg['vehicle_type']} has no color attribute; requested {cfg['vehicle_color_name']}")
+            transform = carla.Transform(cfg['spawn_pos'], carla.Rotation(yaw=cfg['spawn_yaw']))
+            actor = self.world.spawn_actor(bp, transform)
+            actor.set_target_velocity(cfg['velocity'])
+            cfg['actor'] = actor
+            cfg['id'] = actor.id
+            self.active_vehicles[actor.id] = cfg
+            self.despawn_queue[actor.id] = cfg['despawn_frame']
+            print(f'🟢 Spawned vehicle {actor.id} at frame {frame}')
+            self.next_spawn_idx += 1
+
     def run_simulation(self, total_duration_sec):
         total_frames = int(total_duration_sec * self.fps)
         self.vehicle_configs.sort(key=lambda cfg: cfg['spawn_frame'])
@@ -91,35 +116,21 @@ class CARLASimulator:
             print(f'\n🚦 Starting simulation for {total_duration_sec} seconds ({total_frames} frames)...')
             start_wall_time = time.time()
             for frame in tqdm(range(total_frames), desc='Simulating', unit='frame'):
-                self.world.tick()
-                to_despawn = [vid for vid, dframe in self.despawn_queue.items() if dframe == frame]
-                for vid in to_despawn:
-                    actor = self.active_vehicles[vid]['actor']
-                    actor.destroy()
-                    print(f'🔴 Despawned vehicle {vid} at frame {frame}')
-                    del self.active_vehicles[vid]
-                    del self.despawn_queue[vid]
-                while self.next_spawn_idx < len(self.vehicle_configs) and self.vehicle_configs[self.next_spawn_idx]['spawn_frame'] == frame:
-                    cfg = self.vehicle_configs[self.next_spawn_idx]
-                    bp = self.blueprint_library.filter(cfg['vehicle_type'])[0]
-                    if cfg.get('vehicle_color') and bp.has_attribute('color'):
-                        bp.set_attribute('color', cfg['vehicle_color'])
-                    elif cfg.get('vehicle_color'):
-                        print(f"⚠️ Blueprint {cfg['vehicle_type']} has no color attribute; requested {cfg['vehicle_color_name']}")
-                    transform = carla.Transform(cfg['spawn_pos'], carla.Rotation(yaw=cfg['spawn_yaw']))
-                    actor = self.world.spawn_actor(bp, transform)
-                    actor.set_target_velocity(cfg['velocity'])
-                    cfg['actor'] = actor
-                    cfg['id'] = actor.id
-                    self.active_vehicles[actor.id] = cfg
-                    self.despawn_queue[actor.id] = cfg['despawn_frame']
-                    print(f'🟢 Spawned vehicle {actor.id} at frame {frame}')
-                    self.next_spawn_idx += 1
+                if self.record_fov:
+                    # Apply lifecycle/control before the image-producing tick so
+                    # FOV labels and recorded camera frames describe the same scene.
+                    self._update_vehicles(frame)
+                    if self.maintain_velocity:
+                        for cfg in self.active_vehicles.values():
+                            cfg['actor'].set_target_velocity(cfg['velocity'])
+                world_frame = self.world.tick()
+                if not self.record_fov:
+                    self._update_vehicles(frame)
                 with open(self.csv_path, 'a', newline='') as f:
                     writer = csv.writer(f)
                     for vid, cfg in self.active_vehicles.items():
                         actor = cfg['actor']
-                        if self.maintain_velocity:
+                        if self.maintain_velocity and not self.record_fov:
                             actor.set_target_velocity(cfg['velocity'])
                         transform = actor.get_transform()
                         loc = transform.location
@@ -137,6 +148,11 @@ class CARLASimulator:
                         writer.writerow(row)
                 for i, (q, writer) in enumerate(zip(self.static_cam_queues, self.segmented_writers)):
                     image = q.get(timeout=2.0)
+                    if self.record_fov:
+                        while image.frame < world_frame:
+                            image = q.get(timeout=2.0)
+                        if image.frame != world_frame:
+                            raise RuntimeError('Camera frame does not match the FOV/trajectory tick')
                     array = np.frombuffer(image.raw_data, dtype=np.uint8)
                     rgb = array.reshape((image.height, image.width, 4))[:, :, :3]
                     writer.write_frame(rgb)

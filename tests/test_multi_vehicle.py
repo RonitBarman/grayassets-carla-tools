@@ -1,9 +1,13 @@
 """Focused schedule checks; no CARLA server or third-party dependencies needed."""
 import math
+import csv
+from pathlib import Path
 import random
+import tempfile
 import unittest
 
-from helpers.multi_vehicle import stagger_schedule, validate_settings
+from helpers.multi_vehicle import stagger_schedule, stagger_visible_schedule, validate_settings, NoFeasibleSchedule
+from helpers.visibility import measure_visible_overlap
 
 
 class StaggerScheduleTests(unittest.TestCase):
@@ -45,6 +49,59 @@ class StaggerScheduleTests(unittest.TestCase):
         rng = random.Random(1)
         for _ in range(100):
             self.assert_separated([rng.uniform(.1, 20) for _ in range(3)], rng.uniform(.01, 3))
+
+
+class VisibleOverlapTests(unittest.TestCase):
+    def test_camera_windows_not_actor_lifetimes_control_overlap(self):
+        windows = [(30, 150), (90, 210), (60, 180)]
+        schedule = stagger_visible_schedule([10, 10, 10], windows, 1, 2)
+        start = max(spawn + window[0] for (spawn, _), window in zip(schedule, windows))
+        end = min(spawn + window[1] for (spawn, _), window in zip(schedule, windows))
+        self.assertGreaterEqual(end - start, 60)
+        for events in ([s for s, _ in schedule], [e for _, e in schedule]):
+            ordered = sorted(events)
+            self.assertTrue(all(b - a >= 30 for a, b in zip(ordered, ordered[1:])))
+
+    def test_infeasible_overlap_does_not_extend_travel_durations(self):
+        with self.assertRaises(NoFeasibleSchedule):
+            stagger_visible_schedule([10, 10, 10], [(0, 60)] * 3, 1, 2)
+        with self.assertRaises(NoFeasibleSchedule):
+            stagger_visible_schedule([10], [None], 1, 2)
+
+    def test_subframe_minimum_rounds_up_and_single_car_works(self):
+        schedule = stagger_visible_schedule([1], [(2, 12)], .1, .05)
+        self.assertEqual(schedule, [(0, 30)])
+        with self.assertRaises(NoFeasibleSchedule):
+            stagger_visible_schedule([1], [(2, 3)], .1, .05)
+
+    def test_invalid_minimum(self):
+        for minimum in [-1, float('inf'), float('nan'), True, '2']:
+            with self.subTest(minimum=minimum), self.assertRaises(ValueError):
+                validate_settings(3, 1, minimum)
+
+    def test_zero_minimum_preserves_existing_schedule(self):
+        durations = [10, 7, 9]
+        self.assertEqual(stagger_visible_schedule(durations, [], 1, 0),
+                         stagger_schedule(durations, 1))
+
+    def test_measurement_requires_continuous_visibility_of_every_car(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'trajectory.csv'
+            with path.open('w', newline='') as stream:
+                writer = csv.writer(stream)
+                writer.writerow(['frame', 'vehicle_index', 'fov_states'])
+                for frame in [0, 1, 2, 3, 5, 6]:
+                    for car in range(3):
+                        states = [0, 0, 0, 0]
+                        # A spawned but invisible car breaks the run at frame 2.
+                        if (frame, car) != (2, 2):
+                            states[car] = 1 if car == 0 else 2
+                        writer.writerow([frame, car, states])
+            result = measure_visible_overlap(path, 3, fps=10)
+            self.assertEqual(result['overlap_frames'], 2)
+            self.assertEqual(result['overlap_seconds'], .2)
+            self.assertEqual(result['overlap_start_frame'], 0)
+            self.assertEqual(result['overlap_end_frame'], 2)
 
 
 if __name__ == '__main__':

@@ -21,6 +21,7 @@ GRID_VIDEO = False
 # Multi-vehicle mode: one shared recording per sample, with at most three cars.
 CARS_PER_SAMPLE = 3                # 1, 2 or 3
 DELTA_SECONDS = 1.0                # minimum gap between entrances AND between exits
+MIN_OVERLAP_SECONDS = 2.0          # continuous time ALL cars are in camera coverage
 
 # CARLA stays outside this repository. Set START_SERVER=False to use a running server.
 CARLA_ROOT = ROOT.parent / 'grayassets_carla'
@@ -44,7 +45,7 @@ BUFFER_DURATIONS = [1]
 
 # Leave this automatic, or give the experiment a fixed name to reuse its outputs.
 EXPERIMENT_NAME = (
-    f'{MODE}_{CARS_PER_SAMPLE}cars_delta{DELTA_SECONDS:g}_{NUM_SAMPLES}samples'
+    f'{MODE}_{CARS_PER_SAMPLE}cars_delta{DELTA_SECONDS:g}_overlap{MIN_OVERLAP_SECONDS:g}_{NUM_SAMPLES}samples'
     if MODE == 'multi_vehicle' else f'{MODE}_{NUM_SAMPLES}samples'
 )
 OUTPUT_ROOT = ROOT / 'output'

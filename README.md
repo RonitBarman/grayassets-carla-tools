@@ -15,8 +15,8 @@ python 5_extract_packet_fields.py
 python 6_add_delay_jitter.py
 ```
 
-The supplied step 1 settings generate **five separate vehicle scenarios**, each
-with four camera videos: 20 videos total. Change `NUM_SAMPLES`, `SEEDS`, `TIMES`,
+The supplied step 1 settings generate **three multi-vehicle samples**, each with
+three cars and four camera videos: 12 videos total. Change `NUM_SAMPLES`, `SEEDS`, `TIMES`,
 vehicle types, colors, directions and speed range directly in `1_generate_videos.py`.
 `NUM_SAMPLES` is per seed/time pair. Step 1 starts CARLA by default; set
 `START_SERVER = False` to use a running simulator. `CARLA_ROOT` points to the
@@ -100,6 +100,7 @@ six numbered scripts:
 MODE = 'multi_vehicle'
 CARS_PER_SAMPLE = 3
 DELTA_SECONDS = 1.0
+MIN_OVERLAP_SECONDS = 2.0
 NUM_SAMPLES = 5
 ```
 
@@ -108,22 +109,44 @@ camera MP4s. There are never more than three scheduled cars in one sample.
 Delta is a **minimum time gap in seconds**, rounded up to whole simulation frames:
 both spawn times and despawn times are separated by at least delta. When vehicles
 have different travel durations, a later start may be delayed further to keep
-the exits staggered too. A sufficiently large delta can make the cars sequential
-rather than overlapping. Different approach directions are chosen where possible.
+the exits staggered too. Different approach directions are chosen where possible.
 The gap controls actor spawn/despawn events; individual camera FOV entry/exit
 times also depend on the direction and speed of each car.
 
-For three cars with travel durations of 10, 7 and 9 seconds and delta 1 second,
-the schedule is: car 0 at 0–10 s, car 1 at 4–11 s, car 2 at 5–14 s. Both entrance
-and exit gaps satisfy the minimum, and all three overlap from 5–10 s.
+`MIN_OVERLAP_SECONDS` requires a continuous interval where **every car is inside
+at least one of the four camera FOVs**, possibly different views for different
+cars. Merely being spawned outside camera coverage does not count. Partial FOV
+inclusion counts as visible, using the same geometric FOV labels as ground truth;
+these labels do not measure occlusion. The minimum is rounded up to whole frames.
+Set it to `0` to disable this constraint and use the original stagger-only plan.
+
+The planner checks projected camera coverage, tries vehicle entrance orders, and
+resamples infeasible vehicle choices before recording (at most 100 plans per
+sample). It preserves the sampled speeds/travel durations rather than keeping
+cars spawned after their routes solely to inflate overlap. If no plan fits, it
+raises an error explaining that the minimum, delta or speed range must change.
+Large deltas and short/fast routes can make an overlap request infeasible.
+Coverage planning currently uses the existing box models for Tesla Model 3,
+Nissan Patrol and Mercedes Sprinter.
+
+After recording, actual FOV labels verify the longest continuous shared-visible
+interval. If it is too short, generation fails explicitly; the sample is retained
+for inspection and is not silently accepted or skipped on rerun. Use a fresh
+experiment name to retry a failed sample. Changing the minimum automatically
+changes the default experiment and sample folder names, preserving older outputs.
 
 Multi-vehicle sample folders contain `video_camera1.mp4` through
-`video_camera4.mp4`, `vehicle_schedule.csv`, and `all_vehicle_trajectories.csv`.
+`video_camera4.mp4`, `vehicle_schedule.csv`, `all_vehicle_trajectories.csv`, and
+`visibility_summary.csv`.
 The schedule records each car's parameters and exact spawn/despawn frames/times.
+With overlap enabled, it also records predicted visible-frame bounds. The summary
+records the requested minimum, measured overlap bounds/duration, and pass/fail.
 Trajectories have one row per active car per frame, with a stable `vehicle_index`
 for joining the schedule, CARLA actor ID, position/velocity, rotation and four
-FOV states. The final frame includes all scheduled despawns. Folder names include
-the car count and delta; downstream paths continue to follow automatically.
+FOV states. Multi-vehicle lifecycle/control changes occur before the rendering
+tick, and camera frame IDs are matched to that tick so labels describe the encoded
+scene. The final frame includes all scheduled despawns. Folder names include the
+car count, delta and minimum overlap; downstream paths follow automatically.
 
 For the optional network backends, replace step 4 with
 `4_stream_videos_mininet.py` (wired Mininet) or `4_stream_videos_wifi.py`
