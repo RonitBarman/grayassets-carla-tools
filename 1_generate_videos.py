@@ -2,8 +2,8 @@
 from helpers.pipeline import ROOT, resolve
 
 # ── Generation settings ──────────────────────────────────────────────────────
-MODE = 'separate'                  # separate, continuous, agent, pedestrians
-NUM_SAMPLES = 5                    # per seed AND lighting time
+MODE = 'multi_vehicle'                  # separate, multi_vehicle, continuous, agent, pedestrians
+NUM_SAMPLES = 3                    # per seed AND lighting time
 SEEDS = [1]
 TIMES = ['12:00']                   # use [None] for fixed default lighting
 VEHICLE_TYPES = ['vehicle.tesla.model3']
@@ -17,6 +17,10 @@ LANE_OFFSET_RANGE = 0.5
 DISABLE_TRAFFIC_LIGHTS = True
 DISABLE_WEATHER = True
 GRID_VIDEO = False
+
+# Multi-vehicle mode: one shared recording per sample, with at most three cars.
+CARS_PER_SAMPLE = 3                # 1, 2 or 3
+DELTA_SECONDS = 1.0                # minimum gap between entrances AND between exits
 
 # CARLA stays outside this repository. Set START_SERVER=False to use a running server.
 CARLA_ROOT = ROOT.parent / 'grayassets_carla'
@@ -39,7 +43,10 @@ WITH_OPPOSITE = True
 BUFFER_DURATIONS = [1]
 
 # Leave this automatic, or give the experiment a fixed name to reuse its outputs.
-EXPERIMENT_NAME = f'{MODE}_{NUM_SAMPLES}samples'
+EXPERIMENT_NAME = (
+    f'{MODE}_{CARS_PER_SAMPLE}cars_delta{DELTA_SECONDS:g}_{NUM_SAMPLES}samples'
+    if MODE == 'multi_vehicle' else f'{MODE}_{NUM_SAMPLES}samples'
+)
 OUTPUT_ROOT = ROOT / 'output'
 DATASET_DIR = resolve(OUTPUT_ROOT) / EXPERIMENT_NAME
 

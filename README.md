@@ -82,6 +82,9 @@ as in the original; a fresh experiment name starts a fresh dataset.
 Set `MODE` in step 1:
 
 - `'separate'`: one fixed-velocity vehicle per scenario.
+- `'multi_vehicle'`: 1–3 fixed-velocity cars in each sample, recorded together by
+  the four cameras. `CARS_PER_SAMPLE` sets the count and `DELTA_SECONDS` staggers
+  their entrances and exits. See the example below.
 - `'continuous'`: one long recording per seed/time, with scheduled traffic;
   `WITH_FOLLOWERS` and `WITH_OPPOSITE` control overlapping traffic. The sample
   count is the number of primary events; additional vehicles can be scheduled.
@@ -89,6 +92,38 @@ Set `MODE` in step 1:
   `'basicagent'`; four approaches and straight/turning movements.
 - `'pedestrians'`: agent mode with seeded walkers and controllers; road crossing
   and the vehicle's pedestrian-avoidance manager follow the original behavior.
+
+For example, edit these settings in `1_generate_videos.py`, then run the same
+six numbered scripts:
+
+```python
+MODE = 'multi_vehicle'
+CARS_PER_SAMPLE = 3
+DELTA_SECONDS = 1.0
+NUM_SAMPLES = 5
+```
+
+This creates five samples, each containing three scheduled cars and four shared
+camera MP4s. There are never more than three scheduled cars in one sample.
+Delta is a **minimum time gap in seconds**, rounded up to whole simulation frames:
+both spawn times and despawn times are separated by at least delta. When vehicles
+have different travel durations, a later start may be delayed further to keep
+the exits staggered too. A sufficiently large delta can make the cars sequential
+rather than overlapping. Different approach directions are chosen where possible.
+The gap controls actor spawn/despawn events; individual camera FOV entry/exit
+times also depend on the direction and speed of each car.
+
+For three cars with travel durations of 10, 7 and 9 seconds and delta 1 second,
+the schedule is: car 0 at 0–10 s, car 1 at 4–11 s, car 2 at 5–14 s. Both entrance
+and exit gaps satisfy the minimum, and all three overlap from 5–10 s.
+
+Multi-vehicle sample folders contain `video_camera1.mp4` through
+`video_camera4.mp4`, `vehicle_schedule.csv`, and `all_vehicle_trajectories.csv`.
+The schedule records each car's parameters and exact spawn/despawn frames/times.
+Trajectories have one row per active car per frame, with a stable `vehicle_index`
+for joining the schedule, CARLA actor ID, position/velocity, rotation and four
+FOV states. The final frame includes all scheduled despawns. Folder names include
+the car count and delta; downstream paths continue to follow automatically.
 
 For the optional network backends, replace step 4 with
 `4_stream_videos_mininet.py` (wired Mininet) or `4_stream_videos_wifi.py`

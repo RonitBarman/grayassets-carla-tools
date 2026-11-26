@@ -11,15 +11,25 @@ from helpers.cameras import camera_transforms as make_camera_transforms
 
 class CARLASimulator:
 
-    def __init__(self, folder_name, fps=30, camera_fov=120, camera_resolution=(1280, 720), output_root='output', host='localhost', port=2000, disable_traffic_lights=True, disable_weather=True):
+    def __init__(self, folder_name, fps=30, camera_fov=120, camera_resolution=(1280, 720), output_root='output', host='localhost', port=2000, disable_traffic_lights=True, disable_weather=True, *, maintain_velocity=False, record_fov=False):
         self.fps = fps
         self.output_root = output_root
         self.camera_resolution = camera_resolution
+        self.maintain_velocity = maintain_velocity
+        self.record_fov = record_fov
         self.vehicle_configs = []
         self.active_vehicles = {}
         self.despawn_queue = {}
         self.csv_path = os.path.join(self.output_root, folder_name, 'all_vehicle_trajectories.csv')
         self.vehicle_trajectories = [['frame', 'timestamp', 'vehicle_id', 'vehicle_type', 'x', 'y', 'z', 'vx', 'vy', 'vz']]
+        if record_fov:
+            self.vehicle_trajectories[0] += ['vehicle_index', 'yaw', 'pitch', 'roll', 'fov_states']
+            from helpers.geometry import build_camera_frustum
+            self.cam_models = [build_camera_frustum(
+                (tf.location.x, tf.location.y, tf.location.z),
+                tf.rotation.pitch, tf.rotation.yaw, tf.rotation.roll,
+                camera_fov, *camera_resolution, near_clip=0.1, far_clip=1000.0)
+                for tf in make_camera_transforms()]
         self.client = carla.Client(host, port)
         self.client.set_timeout(10.0)
         self.world = self.client.get_world()
@@ -47,7 +57,7 @@ class CARLASimulator:
         os.makedirs(os.path.dirname(self.csv_path), exist_ok=True)
         with open(self.csv_path, 'w', newline='') as f:
             writer = csv.writer(f)
-            writer.writerow(['frame', 'timestamp', 'vehicle_id', 'vehicle_type', 'x', 'y', 'z', 'vx', 'vy', 'vz'])
+            writer.writerow(self.vehicle_trajectories[0])
 
     def _setup_cameras(self, fov):
         camera_transforms = make_camera_transforms()
@@ -68,10 +78,11 @@ class CARLASimulator:
             buffers.append([])
         return (cameras, queues, buffers)
 
-    def schedule_vehicle(self, vehicle_type, velocity, spawn_pos, spawn_yaw, spawn_time, duration, vehicle_color_name=None, vehicle_color=None):
-        spawn_frame = int(spawn_time * self.fps)
-        despawn_frame = int((spawn_time + duration) * self.fps)
-        self.vehicle_configs.append({'vehicle_type': vehicle_type, 'velocity': carla.Vector3D(x=velocity[0], y=velocity[1], z=0.0), 'spawn_pos': carla.Location(x=spawn_pos[0], y=spawn_pos[1], z=0.3), 'spawn_yaw': spawn_yaw, 'spawn_frame': spawn_frame, 'despawn_frame': despawn_frame, 'vehicle_color_name': vehicle_color_name, 'vehicle_color': vehicle_color})
+    def schedule_vehicle(self, vehicle_type, velocity, spawn_pos, spawn_yaw, spawn_time, duration, vehicle_color_name=None, vehicle_color=None, *, spawn_frame=None, despawn_frame=None, vehicle_index=None):
+        # Exact frame bounds avoid rounding a planned event into the wrong tick.
+        spawn_frame = int(spawn_time * self.fps) if spawn_frame is None else spawn_frame
+        despawn_frame = int((spawn_time + duration) * self.fps) if despawn_frame is None else despawn_frame
+        self.vehicle_configs.append({'vehicle_type': vehicle_type, 'velocity': carla.Vector3D(x=velocity[0], y=velocity[1], z=0.0), 'spawn_pos': carla.Location(x=spawn_pos[0], y=spawn_pos[1], z=0.3), 'spawn_yaw': spawn_yaw, 'spawn_frame': spawn_frame, 'despawn_frame': despawn_frame, 'vehicle_color_name': vehicle_color_name, 'vehicle_color': vehicle_color, 'vehicle_index': vehicle_index})
 
     def run_simulation(self, total_duration_sec):
         total_frames = int(total_duration_sec * self.fps)
@@ -108,9 +119,22 @@ class CARLASimulator:
                     writer = csv.writer(f)
                     for vid, cfg in self.active_vehicles.items():
                         actor = cfg['actor']
-                        loc = actor.get_transform().location
+                        if self.maintain_velocity:
+                            actor.set_target_velocity(cfg['velocity'])
+                        transform = actor.get_transform()
+                        loc = transform.location
                         vel = actor.get_velocity()
-                        writer.writerow([frame, frame / self.fps, vid, cfg['vehicle_type'], loc.x, loc.y, loc.z, vel.x, vel.y, vel.z])
+                        row = [frame, frame / self.fps, vid, cfg['vehicle_type'], loc.x, loc.y, loc.z, vel.x, vel.y, vel.z]
+                        if self.record_fov:
+                            from helpers.geometry import get_brand_id, vehicle_bbox_corners_world, classify_bbox_vs_frustum
+                            brand = get_brand_id(actor)
+                            if brand is not None:
+                                corners = vehicle_bbox_corners_world((loc.x, loc.y, loc.z), transform.rotation.yaw, brand)
+                            else:
+                                corners = np.array([(v.x, v.y, v.z) for v in actor.bounding_box.get_world_vertices(transform)])
+                            states = [classify_bbox_vs_frustum(corners, camera) for camera in self.cam_models]
+                            row += [cfg['vehicle_index'], transform.rotation.yaw, transform.rotation.pitch, transform.rotation.roll, states]
+                        writer.writerow(row)
                 for i, (q, writer) in enumerate(zip(self.static_cam_queues, self.segmented_writers)):
                     image = q.get(timeout=2.0)
                     array = np.frombuffer(image.raw_data, dtype=np.uint8)

@@ -14,10 +14,13 @@ def lane_offset(settings):
 
 def generate(settings):
     s = settings
-    if s['MODE'] not in ('separate', 'continuous', 'agent', 'pedestrians'):
-        raise ValueError('MODE must be separate, continuous, agent, or pedestrians')
+    if s['MODE'] not in ('separate', 'multi_vehicle', 'continuous', 'agent', 'pedestrians'):
+        raise ValueError('MODE must be separate, multi_vehicle, continuous, agent, or pedestrians')
     if s['NUM_SAMPLES'] < 1:
         raise ValueError('NUM_SAMPLES must be positive')
+    if s['MODE'] == 'multi_vehicle':
+        from helpers.multi_vehicle import validate_settings
+        validate_settings(s['CARS_PER_SAMPLE'], s['DELTA_SECONDS'])
     if s['MODE'] in ('agent', 'pedestrians'):
         api = Path(s['CARLA_ROOT']) / 'PythonAPI' / 'carla'
         if str(api) not in sys.path:
@@ -36,6 +39,10 @@ def generate(settings):
                     continue
                 random.seed(seed)
                 for index in range(s['NUM_SAMPLES']):
+                    if s['MODE'] == 'multi_vehicle':
+                        from helpers.multi_vehicle import generate_sample
+                        generate_sample(s, index, lighting, folder)
+                        continue
                     vehicle = random.choice(s['VEHICLE_TYPES'])
                     # Preserve the different random-selection order in the legacy modes.
                     if s['MODE'] == 'separate':
